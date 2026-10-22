@@ -234,6 +234,12 @@ nav.tabs .dot{position:absolute;top:9px;right:calc(50% - 18px);min-width:16px;he
 .verdictbox.low{background:var(--bad-soft)}
 .verdictbox b{font-weight:700}
 .voice .vtop .row{gap:8px}
+.gstep{display:grid;grid-template-columns:30px 1fr;gap:10px;align-items:start}
+.gstep .n{width:30px;height:30px;border-radius:50%;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;font:700 14px var(--f-mono)}
+.gstep.done .n{background:var(--accent-soft);color:var(--accent)}
+.gstep ol{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:4px;font-size:14px}
+.gstep h3{font-size:15px}
+kbd{font:600 13px var(--f-mono);background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--nav-h) + env(safe-area-inset-bottom,0px) + 70px);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:99px;font-size:14px;font-weight:600;z-index:40;max-width:calc(100% - 32px);text-align:center}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -436,6 +442,12 @@ nav.tabs .dot{position:absolute;top:9px;right:calc(50% - 18px);min-width:16px;he
 </div>
 
 <!-- Réglages -->
+<div class="sheet" id="jbGuide" hidden>
+  <div class="panel" role="dialog" aria-label="Joybuy, étape par étape">
+    <div class="row"><h2 class="grow" id="jbgTitle">Joybuy, étape par étape</h2><button class="btn small" id="jbgClose">Fermer</button></div>
+    <div id="jbgBody" style="display:flex;flex-direction:column;gap:14px"></div>
+  </div>
+</div>
 <div class="sheet" id="settings" hidden>
   <div class="panel" role="dialog" aria-label="Réglages">
     <div class="row"><h2 class="grow">Réglages</h2><button class="btn small" id="closeSettings">Fermer</button></div>
@@ -1003,7 +1015,8 @@ function renderList(){
     el('div',{class:'row'}, el('div',{class:'grow'}, el('div',{class:'label',text:'Total'}), el('div',{class:'mono',style:'font-size:26px;font-weight:600',text:fmtEUR(total)})),
       el('span',{class:'chip '+(total>b?'bad':''),text: total>b ? 'dépasse les '+fmtEUR(b) : 'sous les '+fmtEUR(b)})),
     budgetBox(L), nutriLine(L),
-    el('div',{class:'note',text:`${real} prix sur ${L.items.length} sont des prix réels (tes tickets, Open Prices ou Joybuy)`+(L.items.some(it=>it.source==='reference') ? `, ${L.items.filter(it=>it.source==='reference').length} sont estimés à partir d'un prix réel dans une autre enseigne.` : '.')}),
+    L.missing?.length ? el('div',{class:'verdictbox tight'}, el('b',{text:'Pas trouvé sur Joybuy'}), el('span',{text: L.missing.join(', ') + '. À acheter ailleurs, ou relance une recherche.'})) : null,
+    L.onlineOnly ? el('div',{class:'note',text:'Tous les prix sont les vrais prix Joybuy du '+frDate(L.generatedAt).replace(/\.$/,'')+', avec un lien vers chaque produit.'}) : el('div',{class:'note',text:`${real} prix sur ${L.items.length} sont des prix réels (tes tickets, Open Prices ou Joybuy)`+(L.items.some(it=>it.source==='reference') ? `, ${L.items.filter(it=>it.source==='reference').length} sont estimés à partir d'un prix réel dans une autre enseigne.` : '.')}),
     L.tips ? el('div',{text:L.tips,style:'font-size:14px'}) : null);
   const stores = Object.entries(byStore).map(([st,rows]) => el('div',{class:'card'},
     el('div',{class:'store-h'}, el('h3',{text:st}), el('span',{class:'mono note',text:fmtEUR(rows.reduce((a,[it])=>a+num(it.price),0))})),
@@ -1614,7 +1627,9 @@ async function generateList({extra='', budget=null, days=null}){
   try {
     // 1. sélection des produits
     stepUI(0);
-    const a = await gemini({system:'Tu prépares des listes de courses économiques et nutritionnellement justes pour un étudiant français. Tu connais bien les prix réels des supermarchés français. Tu réponds en JSON.', contents:[{role:'user',parts:[{text:`${listContext(job)}
+    const a = onlineOnly(stores)
+      ? await gemini({system:'Tu prépares des listes de courses en ligne économiques et nutritionnellement justes pour un étudiant français. Tu réponds en JSON.', contents:[{role:'user',parts:[{text:onlineStep1Prompt(job, nItems)}]}]})
+      : await gemini({system:'Tu prépares des listes de courses économiques et nutritionnellement justes pour un étudiant français. Tu connais bien les prix réels des supermarchés français. Tu réponds en JSON.', contents:[{role:'user',parts:[{text:`${listContext(job)}
 
 Propose la liste de courses (${nItems} articles) qui couvre tous ses repas sur la durée, en respectant son objectif et ses apports caloriques et protéiques. Privilégie les aliments au meilleur rapport prix/nutrition compatibles avec son régime (par exemple œufs, poulet ou dinde, thon, sardines, lentilles, pois chiches, riz, pâtes, flocons d'avoine, légumes surgelés, fruits de saison), en excluant tout ce que ses goûts ou contraintes interdisent. Relis chaque article et supprime ceux qui les contredisent.
 Pour chaque article : "search" = 2 à 4 mots-clés français génériques (ex. "oeufs plein air", "riz basmati", "blanc poulet") ; "searchEn" = 1 à 3 mots anglais génériques (ex. "eggs", "basmati rice", "chicken breast", "bananas") ; "est" = prix réaliste ${new Date().getFullYear()} dans le magasin indiqué ; "kcal" et "protein" = total pour la quantité achetée.
@@ -1624,7 +1639,7 @@ JSON : {"items":[{"name":"...","qty":"2 x 500 g","search":"...","searchEn":"..."
     job.a = a;
     // Boutique en ligne choisie : il faut ses prix du jour, récupérés depuis ton navigateur par le favori Chef Joybuy
     if (online.includes('Joybuy')){
-      const missing = jbMissingQueries((a.items||[]).map(it => it.search || it.name));
+      const missing = jbMissingQueries(onlineOnly(stores) ? onlineQueries(a.items||[]) : (a.items||[]).map(it => it.search || it.name));
       if (missing.length){
         S.pendingList = {...job, queries: missing, createdAt: new Date().toISOString()};
         save(); stepUI(null); showJbStep();
@@ -1641,10 +1656,10 @@ function showJbStep(){
   box.hidden = false;
   box.replaceChildren(
     el('b',{text:'Étape Joybuy : récupérer les prix du jour'}),
-    el('span',{text:`Le chef a choisi ${P.a?.items?.length||0} produits. Pour avoir les vrais prix et notes Joybuy de ${P.queries.length} d'entre eux, ouvre Joybuy puis touche ton favori « Chef Joybuy ». Tu reviendras ici automatiquement.`}),
+    el('span',{text: onlineOnly(P.stores) ? `Le chef a listé ${P.a?.items?.length||0} besoins. Il va chercher ${P.queries.length} produits sur Joybuy pour ne garder que des articles réels, avec leur prix et leur lien. Ouvre Joybuy puis lance ton favori « Chef Joybuy ».` : `Le chef a choisi ${P.a?.items?.length||0} produits. Pour avoir les vrais prix et notes Joybuy de ${P.queries.length} d'entre eux, ouvre Joybuy puis touche ton favori « Chef Joybuy ». Tu reviendras ici automatiquement.`}),
     el('div',{class:'row'},
       el('button',{class:'btn primary small',text:'Chercher sur Joybuy',onclick:()=>openJoybuy({type:'prices', queries:P.queries, knownReviews:jbKnownReviews()})}),
-      el('button',{class:'btn small',text:'Continuer sans Joybuy',onclick:()=>resumeList({skipJoybuy:true})}),
+      onlineOnly(P.stores) ? null : el('button',{class:'btn small',text:'Continuer sans Joybuy',onclick:()=>resumeList({skipJoybuy:true})}),
       el('button',{class:'btn ghost small',text:'Coller les résultats',onclick:pasteJoybuy})));
 }
 async function resumeList({skipJoybuy=false}={}){
@@ -1661,7 +1676,87 @@ function candLine(c){
   const src = c.src==='ticket' ? 'son ticket' : c.src==='joybuy' ? 'Joybuy (en ligne)' : 'Open Prices';
   return `${c.name} ${c.qtyText} | ${c.store} | ${fmtEUR(c.price)}${c.unitPrice?` (${fmtEUR(c.unitPrice)}/${c.unitBase})`:''} | ${src} ${c.date||''}${q}`;
 }
+// ----- Mode « boutique en ligne uniquement » : aucun prix estimé, seulement des produits trouvés sur le site -----
+const onlineOnly = stores => stores.length > 0 && stores.every(s => STORE_TYPE[s]==='online');
+function jbKnownSample(n=80){
+  // produits Joybuy déjà vus (bien notés), pour que le chef sache ce que le site vend vraiment
+  return Object.values(JB.items).filter(j => (j.rating||0) >= 4.3).sort((a,b) => (b.sold||0)-(a.sold||0)).slice(0,n).map(j => j.name).join(' ; ');
+}
+function onlineStep1Prompt(job, nItems){
+  const sample = jbKnownSample();
+  return `${listContext(job)}
+
+Il fait ses courses UNIQUEMENT sur Joybuy (boutique en ligne, livraison le lendemain, gratuite dès ${ONLINE.Joybuy.freeFrom} €, sinon ${fmtEUR(ONLINE.Joybuy.fee)}). Joybuy vend surtout de l'épicerie (dont beaucoup de produits asiatiques), des conserves, des surgelés, des viandes halal surgelées, des boissons ; peu ou pas de produits frais comme les œufs, les fruits et légumes frais ou les produits laitiers frais.
+${sample ? `Exemples de produits réellement vus sur Joybuy : ${sample}.` : ''}
+Liste les BESOINS de la période (${nItems} besoins) qui couvrent ses repas en respectant son objectif, ses apports et ses goûts, en pensant à ce que Joybuy vend vraiment (ex. riz, pâtes, nouilles, flocons d'avoine, conserves de thon ou de pois chiches, lentilles, légumes surgelés, poulet halal surgelé, tofu, lait UHT, beurre de cacahuète…).
+Pour chaque besoin : "search" = 1 à 3 mots-clés simples comme on les taperait sur le site (ex. "riz basmati", "thon", "poulet halal") ; "alt" = 1 ou 2 autres recherches possibles (synonymes, variantes) ; "kcal" et "protein" = ordre de grandeur pour la quantité voulue.
+Évalue franchement si le budget est réaliste : "budgetCheck" avec status "ok", "serré" ou "insuffisant", "minimum" en euros et "message".
+Plan de repas : au plus 7 lignes.
+JSON : {"items":[{"name":"...","qty":"...","search":"...","alt":["..."],"kcal":0,"protein":0,"why":"courte raison"}],"budgetCheck":{"status":"ok","minimum":0,"message":"..."},"plan":[{"day":"Lun","meals":"midi : … / soir : …"}],"tips":"1 à 2 phrases"}`;
+}
+function onlineQueries(items){
+  const q = [];
+  for (const it of items){ q.push(it.search || it.name); for (const a of (it.alt||[]).slice(0,2)) q.push(a); }
+  return [...new Set(q.map(normKey).filter(Boolean))].slice(0, 36);
+}
+async function finishOnlineList(job){
+  const st = $('#listStatus');
+  const {a, budget, days, stores, kcalDay} = job;
+  const needs = (a.items||[]).filter(x => x && x.name);
+  stepUI(1);
+  // catalogue : tous les produits Joybuy bien notés trouvés pour les recherches de chaque besoin
+  const cat = []; const seen = new Set();
+  needs.forEach((it, i) => {
+    for (const c of searchPrices([it.search || it.name, ...(it.alt||[])], ['Joybuy'], 8)){
+      if (seen.has(c.sku)) continue; seen.add(c.sku);
+      cat.push({...c, need:i});
+    }
+  });
+  if (!cat.length){
+    stepUI(null);
+    st.textContent = 'Aucun produit Joybuy bien noté trouvé pour ces besoins. Relance « Chercher sur Joybuy », ou ajoute un magasin physique pour compléter.';
+    return;
+  }
+  stepUI(2);
+  const lines = cat.map((c,k) => `[J${k}] (besoin #${c.need}) ${c.name} | ${fmtEUR(c.price)}${c.unitPrice?` (${fmtEUR(c.unitPrice)}/${c.unitBase})`:''} | ${c.rating?'★'+String(c.rating).replace('.',','):'sans note'}${c.reviews!=null?` · ${c.reviews} avis`:''}${c.goodRate!=null?` · ${Math.round(c.goodRate*100)} % satisfaits`:''}${c.sold?` · ${c.sold}+ vendus`:''}`).join('\n');
+  const needLines = needs.map((it,i) => `#${i} ${it.name} (${it.qty||''}) — ~${num(it.kcal)} kcal, ~${num(it.protein)} g prot.`).join('\n');
+  const b = await gemini({system:'Tu composes une liste de courses en ligne uniquement à partir d’un catalogue réel. Tu réponds en JSON.', temperature:0.2, contents:[{role:'user',parts:[{text:`${listContext(job)}
+
+Besoins de la période :
+${needLines}
+
+Catalogue RÉEL des produits disponibles sur Joybuy (prix du jour) :
+${lines}
+
+${JB_RULE}
+
+Construis la liste UNIQUEMENT avec des produits de ce catalogue : pour chaque produit retenu, "j" = son numéro (ex. 12 pour J12) et "units" = nombre de paquets. N'invente aucun produit et aucun prix. Un produit doit vraiment correspondre au besoin (vérifie le nom : pas de friandise pour animaux, pas de gâteau quand on cherche des œufs…). Respecte ses goûts et son régime (halal : jamais de porc, d'alcool, de gélatine porcine).
+Si un besoin n'a aucun produit qui convient, ne le remplace pas par une estimation : mets-le dans "missing" et compense si possible avec un autre produit du catalogue (autre source de protéines, autre féculent…).
+Le total (prix × units) doit rester sous ${budget} € et, si possible, dépasser ${ONLINE.Joybuy.freeFrom} € pour la livraison gratuite ; sinon prévois ${fmtEUR(ONLINE.Joybuy.fee)} de livraison dans le budget.
+"kcal" et "protein" = total pour units paquets. Refais "budgetCheck" avec les vrais prix.
+JSON : {"items":[{"j":0,"units":1,"kcal":0,"protein":0,"why":"..."}],"missing":["..."],"budgetCheck":{"status":"ok","minimum":0,"message":"..."},"tips":"1 à 2 phrases"}`}]}]});
+  const final = []; const used = new Set();
+  for (const x of (b.items||[])){
+    const k = num(String(x.j ?? '').replace(/\D/g,''), -1), c = cat[k];
+    if (!c || used.has(c.sku)) continue; used.add(c.sku);
+    const units = Math.max(1, Math.min(20, Math.round(num(x.units,1))));
+    final.push({ name:c.name, qty: units>1 ? `${units} × ${c.name.match(/\d+[.,]?\d*\s?(kg|g|l|ml|cl)\b/i)?.[0] || 'paquet'}` : '', units, store:'Joybuy',
+      price: Math.round(c.price*units*100)/100, kcal:num(x.kcal), protein:num(x.protein), source:'joybuy',
+      sourceLabel:`${fmtEUR(c.price)} l'unité · Joybuy · ${frDate(c.date)}`, why:x.why||'', done:false,
+      sku:c.sku, url:c.url, rating:c.rating, reviews:c.reviews, sold:c.sold, goodRate:c.goodRate });
+  }
+  if (!final.length){ stepUI(null); st.textContent = "Le chef n'a retenu aucun produit du catalogue Joybuy. Réessaie, ou ajoute un magasin physique."; return; }
+  addDeliveryFees(final);
+  const missing = (b.missing||[]).filter(Boolean);
+  S.list = { items: final, plan: a.plan||[], tips: b.tips || a.tips || '', budget, days, budgetCheck: b.budgetCheck || a.budgetCheck || null, kcalTarget: kcalDay ? kcalDay*days : null, stores, missing, onlineOnly:true, generatedAt: new Date().toISOString() };
+  commit(); stepUI(null);
+  st.textContent = '';
+  const tot = final.reduce((s,it)=>s+num(it.price),0);
+  if (!$('#v-chef').hidden || V.on) sysMsg(`Liste Joybuy prête : ${final.length} articles, ${fmtEUR(tot)}.`, 'Voir', () => { closeVoice(); showTab('courses'); });
+}
+
 async function finishList(job){
+  if (onlineOnly(job.stores)) return finishOnlineList(job);
   const st = $('#listStatus');
   const {a, budget, days, stores, kcalDay} = job;
   const context = listContext(job);
@@ -1733,7 +1828,7 @@ let JB = { syncedAt:null, items:{}, queries:{} };   // items par sku ; queries :
 const JB_FRESH_DAYS = 3;
 function jbMissingQueries(list){
   const limit = Date.now() - JB_FRESH_DAYS*864e5;
-  return [...new Set(list.map(q => normKey(q)).filter(Boolean))].filter(q => !(JB.queries[q] && Date.parse(JB.queries[q]) > limit)).slice(0, 30);
+  return [...new Set(list.map(q => normKey(q)).filter(Boolean))].filter(q => !(JB.queries[q] && Date.parse(JB.queries[q]) > limit)).slice(0, 36);
 }
 function jbKnownReviews(){ const limit = Date.now() - 30*864e5; return Object.values(JB.items).filter(i => i.reviews!=null && Date.parse(i.reviewsAt||i.date||0) > limit).map(i => i.sku).slice(0, 400); }
 const b64uEncode = obj => { const bytes = new TextEncoder().encode(JSON.stringify(obj)); let s=''; for (let i=0;i<bytes.length;i+=0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i,i+0x8000)); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); };
@@ -1742,14 +1837,51 @@ const appBase = () => location.origin + location.pathname.replace(/[^/]*$/, '');
 function bookmarkletCode(){
   return `javascript:(function(){var s=document.createElement('script');s.src='${appBase()}joybuy.js?v='+Date.now();document.body.appendChild(s);})();`;
 }
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+const isAndroid = () => /android/i.test(navigator.userAgent);
+const isStandalone = () => { try { return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; } catch { return false; } };
+let jbGuideUrl = '';
 function openJoybuy(mission){
   mission = {...mission, v:1, id:uid(), back: appBase() + (location.pathname.split('/').pop() || '')};
   try { localStorage.setItem('cdp.jbMission', JSON.stringify({id:mission.id, type:mission.type, at:Date.now()})); } catch {}
-  const url = ONLINE.Joybuy.site + '/#cdp=' + b64uEncode(mission);
-  const w = window.open(url, '_blank');
-  if (!w) location.href = url;
-  toast('Sur Joybuy, touche ton favori « Chef Joybuy ».');
+  jbGuideUrl = ONLINE.Joybuy.site + '/#cdp=' + b64uEncode(mission);
+  renderJbGuide(mission.type);
+  $('#jbGuide').hidden = false;
 }
+function jbInstalled(){ try { return localStorage.getItem('cdp.jbInstalled')==='1'; } catch { return false; } }
+function renderJbGuide(type){
+  const ios = isIOS(), android = isAndroid() || !ios, inst = jbInstalled(), standalone = isStandalone();
+  $('#jbgTitle').textContent = type==='cart' ? 'Remplir ton panier Joybuy' : 'Chercher les prix sur Joybuy';
+  const li = (...t) => el('li',{}, ...t);
+  const b = t => el('b',{text:t});
+  const k = t => el('kbd',{text:t});
+  const copyBtn = el('button',{class:'btn small',text:'Copier le code du favori',onclick:async()=>{ try { await navigator.clipboard.writeText(bookmarkletCode()); toast('Code copié'); } catch { toast('Copie impossible : ouvre l’onglet Prix > Joybuy pour le sélectionner.'); } }});
+  const installSteps = ios
+    ? el('ol',{}, li('Touche ', copyBtn), li('Touche le bouton ', b('Partager'), ' de Safari, puis ', b('Ajouter un signet'), ', puis ', b('Enregistrer'), '.'), li('Ouvre les signets (icône livre), touche ', b('Modifier'), ', puis ce nouveau signet.'), li('Nom : ', k('Chef Joybuy'), '. Adresse : efface tout et ', b('colle le code'), '. Touche OK.'))
+    : el('ol',{}, li('Touche ', copyBtn), li('Dans Chrome, touche ', k('⋮'), ' puis l’étoile ', k('☆'), ' pour mettre cette page en favori.'), li('Touche ', k('⋮'), ' > ', b('Favoris'), ', fais un appui long sur ce favori, puis ', b('Modifier'), '.'), li('Nom : ', k('Chef Joybuy'), '. Adresse : efface tout et ', b('colle le code'), '. Reviens en arrière pour enregistrer.'));
+  const step1 = el('div',{class:'gstep'+(inst?' done':'')}, el('span',{class:'n',text: inst ? '✓' : '1'}),
+    el('div',{}, el('h3',{text: inst ? 'Favori « Chef Joybuy » installé' : 'Installe le favori « Chef Joybuy » (une seule fois)'}),
+      inst ? el('button',{class:'btn ghost small',text:'Le réinstaller',onclick:()=>{ try{localStorage.removeItem('cdp.jbInstalled');}catch{} renderJbGuide(type); }}) : installSteps,
+      inst ? null : el('button',{class:'btn primary small',style:'margin-top:8px',text:'C’est fait',onclick:()=>{ try{localStorage.setItem('cdp.jbInstalled','1');}catch{} renderJbGuide(type); }})));
+  const warn = standalone ? el('div',{class:'verdictbox tight'}, el('b',{text:'Tu es dans l’appli installée'}),
+    el('span',{text: ios ? 'Sur iPhone, l’icône de l’écran d’accueil ne voit pas les favoris de Safari. Pour Joybuy, ouvre plutôt Chef de Poche dans Safari, ou utilise « Copier / Coller les résultats ».' : 'Joybuy va s’ouvrir dans une mini-fenêtre sans favoris : touche ⋮ en haut à droite, puis « Ouvrir dans Chrome ».'})) : null;
+  const step2 = el('div',{class:'gstep'}, el('span',{class:'n',text:'2'}),
+    el('div',{}, el('h3',{text:'Ouvre Joybuy'}), warn,
+      el('button',{class:'btn primary',style:'margin-top:8px',text:'Ouvrir Joybuy',onclick:()=>{ const w = window.open(jbGuideUrl,'_blank'); if (!w) location.href = jbGuideUrl; }})));
+  const run = ios
+    ? el('ol',{}, li('Sur la page Joybuy, ouvre les signets (icône livre).'), li('Touche ', b('Chef Joybuy'), '.'))
+    : el('ol',{}, li('Sur la page Joybuy, touche la barre d’adresse.'), li('Tape ', k('Chef Joybuy'), '.'), li('Touche la suggestion avec l’étoile ', k('☆'), ' (pas la recherche Google).'));
+  const step3 = el('div',{class:'gstep'}, el('span',{class:'n',text:'3'}),
+    el('div',{}, el('h3',{text:'Lance le favori sur la page Joybuy'}), run,
+      el('p',{class:'note',style:'margin:6px 0 0',text: type==='cart' ? 'Un encadré vert apparaît en bas et ajoute les produits un par un (quelques secondes chacun). Ensuite, touche « Voir mon panier » pour payer, ou « Revenir à Chef de Poche ».' : 'Un encadré vert apparaît en bas de Joybuy. Attends la fin (environ 30 secondes), puis touche « Revenir à Chef de Poche » : la suite se fait toute seule.'})));
+  const step4 = el('div',{class:'gstep'}, el('span',{class:'n',text:'?'}),
+    el('div',{}, el('h3',{text:'Le retour ne marche pas ?'}),
+      el('p',{class:'note',style:'margin:4px 0 0',text:'Sur Joybuy, touche « Copier les résultats » dans l’encadré vert, reviens ici et touche :'}),
+      el('button',{class:'btn small',style:'margin-top:6px',text:'Coller les résultats',onclick:()=>{ $('#jbGuide').hidden = true; showTab('prix'); pasteJoybuy(); }})));
+  $('#jbgBody').replaceChildren(step1, step2, step3, step4);
+}
+$('#jbgClose').onclick = () => { $('#jbGuide').hidden = true; };
+$('#jbGuide').addEventListener('click', e => { if (e.target.id==='jbGuide') $('#jbGuide').hidden = true; });
 function jbImportPrices(r){
   const at = r.at || new Date().toISOString();
   let n = 0;
@@ -1775,6 +1907,7 @@ async function handleJoybuyResult(code){
   if (jbHandling) return; jbHandling = true;
   try {
     const r = b64uDecode(String(code).replace(/^CDPJB:/,'').trim());
+    $('#jbGuide').hidden = true; try { localStorage.setItem('cdp.jbInstalled','1'); } catch {}
     if (r.type==='prices'){
       const n = jbImportPrices(r);
       renderJoybuy(); renderPrices();
